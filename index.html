@@ -1,0 +1,283 @@
+<html>
+<head>
+	<meta charset="utf-8">
+	<script type="text/javascript" src="soljson-v0.4.26+commit.4563c3fc.js"></script>
+	<script type="text/javascript" src="solc-wrapper.js"></script>
+	<script type="text/javascript" src="object-hash.js"></script>
+	
+	<script type="text/javascript">	
+		// функция получения адреса и интерфейса контракта из параметров адресной строки 
+		function getParamsFromAddressString(){
+			let query = location.search || '';
+			
+			if (query.length > 0){
+				let params = query.substring(1).split('&').map(pair => pair.split('=')),
+					address = params.find(param => param[0] == 'addr'),
+					abi = params.find(param => param[0] == 'abi');
+					
+				if (address && abi){
+					return {
+						address: address[1],
+						abi: JSON.parse(atob(abi[1]))
+					};
+				}
+			}
+			
+			return null;
+		}
+	
+		// функция загрузки исходного кода контракта
+		async function loadContractCode(){
+			return await (await fetch('meeting-contract.sol')).text();
+		}
+	
+		function setHidden(el, isHidden){
+			el.style.display = isHidden ? 'none' : '';
+		}
+		
+		function setDisabled(el, isDisabled){
+			el.style.opacity = isDisabled ? 0.3 : 1;
+			el.style.pointerEvents = isDisabled ? 'none' : '';
+		}
+		
+		function setProgress(el, text, isError){
+			el.innerHTML = text || '';
+			el.style.color = isError ? 'red' : '';
+		}
+		
+		// функция компиляции исходного кода контракта
+		async function compileContract(contractCode){
+			return new Promise((resolve, reject) => {
+				setTimeout(() => {
+					let solc = setupMethods(Module),
+						compiledContract = solc.compile(contractCode, 1);
+					
+					if (compiledContract.errors){	
+						reject(compiledContract.errors[0]);
+					} else {
+						resolve(compiledContract);
+					}
+				}, 500);
+			});
+		}
+		
+		// функция получения интерфейса и байт-кода скомпилированного контракта
+		function getContractMetadata(compiledContract){
+			let contract = compiledContract.contracts[Object.keys(compiledContract.contracts)[0]];
+						
+			return {
+				abi: JSON.parse(contract.interface),
+				code: '0x' + contract.bytecode
+			};
+		}
+		
+		// функция деплоя контракта
+		async function deployContract(code, abi){
+			return new Promise((resolve, reject) => {
+				let contractProxy = web3.eth.contract(abi);
+				
+				contractProxy.new({ from: web3.eth.coinbase, data: code, gas: 1000000}, async (e, contract) => { 
+					if (e) { 
+						reject(e);
+							
+						return;
+					} 
+						
+					if (!contract.address){
+						return;
+					}
+					
+					resolve(contract);
+				});
+			});
+		}
+		 
+		// функция установки имени встречи
+		async function setMeetingName(contract, meetingName){
+			return new Promise((resolve, reject) => {
+				contract.setMeetingName(meetingName, (err, transaction) => {
+					if (err){
+						reject(err);
+					} else {
+						resolve(transaction);
+					}
+				});
+			});
+		}
+		
+		// функция вывода информации о созданной встрече
+		function showMeetingInfo(meetingName, contractAddress, abi){
+			let meetingLink = `${window.location.href}?addr=${contractAddress}&abi=${btoa(JSON.stringify(abi))}`,
+				description = `Встреча "${meetingName}" успешно создана и доступна для регистрации <a href="${meetingLink}">по ссылке</a><br>`
+					+ `Для создания новой встречи <a href="" onclick="window.location.reload()">обновите страницу</a>.`;
+							
+			setHidden(document.getElementById('createNewMeetingForm'), true);
+			document.getElementById('meetingDescription').innerHTML = description;
+		}
+		 
+		// функция открытия контракта по его адресу
+		function openContract(){
+			let params = getParamsFromAddressString();
+			
+			return params ? web3.eth.contract(params.abi).at(params.address) : null; 
+		}
+		
+		// функция получения имени встречи
+		async function getMeetingName(contract){
+			return new Promise((resolve, reject) => {
+				contract.getMeetingName((err, result) => {
+					if (err){
+						reject(err);
+					} else {
+						resolve(result);
+					}
+				});
+			});
+		}
+		
+		// функция регистрации участника встречи
+		async function register(contract, passportHash){
+			return new Promise((resolve, reject) => {
+				contract.registerMember(passportHash, (err, result) => {
+					if (err){
+						reject(err);
+					} else {
+						resolve();
+					}
+				});
+			});
+		}
+		
+		// функция настройки страницы - отображается либо страница создания встречи, либо страница регистрации на встрече
+		async function setupView(contract){
+			let isRegisterPage = !!contract;
+				
+			setHidden(document.getElementById('createNewMeeting'), isRegisterPage);
+			setHidden(document.getElementById('registerOnMeeting'), !isRegisterPage);
+			
+			if (isRegisterPage){
+				let meetingName = await getMeetingName(contract);
+				
+				document.getElementById('meetingNameTitle').innerHTML = `Регистрация на встрече "${meetingName}"`;
+			}
+		}
+		
+		function showSuccessfullyRegistrationMessage(){
+			setHidden(document.getElementById('registerOnMeetingForm'), true);
+			document.getElementById('registrationDescription').innerHTML = 'Вы были успешно зарегистрированы на встрече!';
+		}
+		
+		// функция, проверяющая, зарегистрирован ли участник с таким номером паспорта на встрече
+		async function isRegistered(contract, passportNumberHash){
+			return new Promise((resolve, reject) => {
+				contract.isRegistered(passportNumberHash, (err, result) => {
+					if (err){
+						reject(err);
+					} else {
+						resolve(result);
+					}
+				});
+			});
+		}
+	
+		window.onload = () => {
+			let createMeetingButton = document.getElementById('createMeeting'),
+				registerOnMeetingButton = document.getElementById('registerOnMeetingBtn'),
+				contract = openContract();
+			
+			setupView(contract);
+			
+			registerOnMeetingButton.onclick = async () => {
+				let registerOnMeetingStatus = document.getElementById('registerOnMeetingStatus');
+				setDisabled(registerOnMeetingButton, true);	
+				
+				try {
+					setProgress(registerOnMeetingStatus, 'Проверяем возможность регистрации ...');
+					let passportNumber = document.getElementById('passportNumber').value,
+						passportNumberHash = objectHash.sha1(passportNumber),
+						isRegisteredPassport = await isRegistered(contract, passportNumberHash);
+						
+					if (isRegisteredPassport){
+						setProgress(registerOnMeetingStatus, 'Участник с таким номером паспорта уже зарегистрирован.', true);
+					} else {
+						setProgress(registerOnMeetingStatus, 'Регистрируемся ...');
+						await register(contract, passportNumberHash);
+						
+						showSuccessfullyRegistrationMessage();
+					}
+				} catch (e){
+					console.log(e);
+					setProgress(registerOnMeetingStatus, 'При регистрации произошла ошибка.', true);
+				}
+				
+				setDisabled(registerOnMeetingButton, false);	
+			}
+			
+			createMeetingButton.onclick = async () => {
+				let createMeetingStatus = document.getElementById('createMeetingStatus');
+				setDisabled(createMeetingButton, true);	
+			
+				try {
+					setProgress(createMeetingStatus, 'Получаем код контракта ...');
+					let contractCode = await loadContractCode();
+				
+					setProgress(createMeetingStatus, 'Компилируем контракт ...');
+					let contractMetadata = getContractMetadata(await compileContract(contractCode));
+					
+					setProgress(createMeetingStatus, 'Публикуем контракт ...');
+					let contract = await deployContract(contractMetadata.code, contractMetadata.abi);
+						
+					setProgress(createMeetingStatus, 'Регистрируем имя встречи ...');
+					let meetingName = document.getElementById('meetingName').value;
+					await setMeetingName(contract, meetingName);	
+					
+					showMeetingInfo(meetingName, contract.address, contractMetadata.abi);
+				} catch (e){
+					console.log(e);
+					setProgress(createMeetingStatus, 'При создании встречи произошла ошибка.', true);
+				}
+				
+				setDisabled(createMeetingButton, false);
+			}
+		}
+	</script>
+	<style>
+		.button {
+			margin: 10px;
+		}
+		.text-input {
+			width: 300px;
+		}
+		.meeting-description {
+			width: 500px;
+		}
+	</style>
+</head>
+<body>
+	<div id="createNewMeeting">
+		<h3>Создание новой встречи</h3>
+		<div id="createNewMeetingForm">
+			<label>Введите название встречи:</label>
+			<input id="meetingName" type="text" class="text-input"></input>
+			<div>
+				<button id="createMeeting" class="button">Создать встречу</button>
+				<span id="createMeetingStatus"></span>
+			</div>
+		</div>
+		<div class="meeting-description" id="meetingDescription">	
+		</div>
+	</div>
+	<div id="registerOnMeeting">
+		<h3 id="meetingNameTitle"></h3>
+		<div id="registerOnMeetingForm">
+			<label>Введите номер паспорта:</label>
+			<input id="passportNumber" type="text" class="text-input"></input>
+			<div>
+				<button id="registerOnMeetingBtn" class="button">Зарегистрироваться</button>
+				<span id="registerOnMeetingStatus"></span>
+			</div>
+		</div>
+		<div class="meeting-description" id="registrationDescription"></div>
+	</div>
+</body>
+</html>
