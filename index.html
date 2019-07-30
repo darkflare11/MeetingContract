@@ -31,15 +31,18 @@
 			return await (await fetch('meeting-contract.sol')).text();
 		}
 	
+		// вспомогательная функция для сокрытия/показа HTML-элемента
 		function setHidden(el, isHidden){
 			el.style.display = isHidden ? 'none' : '';
 		}
 		
+		// вспомогательная функция для установки/снятия неактивного состояния HTML-элемента
 		function setDisabled(el, isDisabled){
 			el.style.opacity = isDisabled ? 0.3 : 1;
 			el.style.pointerEvents = isDisabled ? 'none' : '';
 		}
 		
+		// функция отображения прогресса операции
 		function setProgress(el, text, isError){
 			el.innerHTML = text || '';
 			el.style.color = isError ? 'red' : '';
@@ -117,8 +120,10 @@
 		 
 		// функция открытия контракта по его адресу
 		function openContract(){
+			// пытаемся получить информацию о контракте из параметров адресной строки
 			let params = getParamsFromAddressString();
 			
+			// если параметры контракта были переданы, то открываем контракт по указанному адресу, иначе просто возвращаем null 
 			return params ? web3.eth.contract(params.abi).at(params.address) : null; 
 		}
 		
@@ -150,12 +155,15 @@
 		
 		// функция настройки страницы - отображается либо страница создания встречи, либо страница регистрации на встрече
 		async function setupView(contract){
+			// если контракт не задан, то считаем, что мы находимся на странице создания новой встречи
 			let isRegisterPage = !!contract;
-				
+			
+			// скроем или покажем страницы регистрации и создания встречи
 			setHidden(document.getElementById('createNewMeeting'), isRegisterPage);
 			setHidden(document.getElementById('registerOnMeeting'), !isRegisterPage);
 			
 			if (isRegisterPage){
+				// если мы находимся на странице регистрации, то получим из контракта имя встречи и установим его в качестве заголовка страницы
 				let meetingName = await getMeetingName(contract);
 				
 				document.getElementById('meetingNameTitle').innerHTML = `Регистрация на встрече "${meetingName}"`;
@@ -183,23 +191,31 @@
 		window.onload = () => {
 			let createMeetingButton = document.getElementById('createMeeting'),
 				registerOnMeetingButton = document.getElementById('registerOnMeetingBtn'),
+				// пытаемся открыть контракт встречи по параметрам, переданным в адресной строке
 				contract = openContract();
 			
+			// настройка отображаемых страниц (страница регистрации или страница создания новой встречи)
 			setupView(contract);
 			
+			// обработчик кнопки регистрации нового участника встречи
 			registerOnMeetingButton.onclick = async () => {
 				let registerOnMeetingStatus = document.getElementById('registerOnMeetingStatus');
 				setDisabled(registerOnMeetingButton, true);	
 				
 				try {
 					setProgress(registerOnMeetingStatus, 'Проверяем возможность регистрации ...');
+					
+					// проверим, зарегистрирован ли уже участник встречи с таким номером паспорта
 					let passportNumber = document.getElementById('passportNumber').value,
+						// вычислим sha1-хеш номера паспорта, чтобы не передавать в контракт номер паспорта в открытом виде
 						passportNumberHash = objectHash.sha1(passportNumber),
 						isRegisteredPassport = await isRegistered(contract, passportNumberHash);
-						
+					 	
 					if (isRegisteredPassport){
+						// если участник с таким номером паспорта уже зарегистрирован, то сообщим об этом
 						setProgress(registerOnMeetingStatus, 'Участник с таким номером паспорта уже зарегистрирован.', true);
 					} else {
+						// иначе зарегистрируем участника, используя в качестве идентификатора хеш номера паспорта
 						setProgress(registerOnMeetingStatus, 'Регистрируемся ...');
 						await register(contract, passportNumberHash);
 						
@@ -213,24 +229,32 @@
 				setDisabled(registerOnMeetingButton, false);	
 			}
 			
+			// обработчик кнопки создания новой встречи
 			createMeetingButton.onclick = async () => {
 				let createMeetingStatus = document.getElementById('createMeetingStatus');
 				setDisabled(createMeetingButton, true);	
 			
 				try {
+					// получим исходный код контракта на языке Solidity (лежит рядом с HTML-файлом приложения)
 					setProgress(createMeetingStatus, 'Получаем код контракта ...');
 					let contractCode = await loadContractCode();
 				
+					// скомпилируем контракт с помощью библиотеки soljson
 					setProgress(createMeetingStatus, 'Компилируем контракт ...');
 					let contractMetadata = getContractMetadata(await compileContract(contractCode));
 					
+					// опубликуем скомпилированный контракт через Metamask (используется инжектированный плагином Metamask web3js)
 					setProgress(createMeetingStatus, 'Публикуем контракт ...');
 					let contract = await deployContract(contractMetadata.code, contractMetadata.abi);
-						
+					
+					// зададим имя встречи 
 					setProgress(createMeetingStatus, 'Регистрируем имя встречи ...');
 					let meetingName = document.getElementById('meetingName').value;
 					await setMeetingName(contract, meetingName);	
 					
+					// выдаем создателю встречи ссылку для регистрации во встрече 
+					// (ссылка вида http(s)://<адрес этого приложения>/?addr=<адрес контракта>&abi=<интерфейс контракта>) 
+					// Предполагается, что создатель встречи рассылает данную ссылку потенциальным участникам по каким-либо каналам связи.
 					showMeetingInfo(meetingName, contract.address, contractMetadata.abi);
 				} catch (e){
 					console.log(e);
